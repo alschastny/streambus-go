@@ -12,7 +12,7 @@ type Consumer interface {
 	Read(ctx context.Context, count int, blockDuration time.Duration) (map[string][]Message, error)
 
 	// Ack acknowledges messages for a subject.
-	Ack(ctx context.Context, subject string, ids ...string) (int64, error)
+	Ack(ctx context.Context, subject string, ids ...string) (int, error)
 
 	// Nack negatively acknowledges a message. Not supported by all consumer types.
 	Nack(ctx context.Context, subject, id string, nackDelay *time.Duration) (int, error)
@@ -56,10 +56,10 @@ func newOrderedConsumer(bus Bus, group, consumer string) Consumer {
 // newOrderedStrictConsumer creates an ordered strict consumer from an existing bus.
 func newOrderedStrictConsumer(bus Bus, group, consumer string, info Info, subjects []string) (Consumer, error) {
 	if info == nil {
-		return nil, fmt.Errorf("info interface required for ordered strict consumer")
+		return nil, &ConsumerError{Op: "new", Group: group, Consumer: consumer, Err: fmt.Errorf("info interface required for ordered strict consumer")}
 	}
 	if len(subjects) == 0 {
-		return nil, fmt.Errorf("subjects required for ordered strict consumer")
+		return nil, &ConsumerError{Op: "new", Group: group, Consumer: consumer, Err: fmt.Errorf("subjects required for ordered strict consumer")}
 	}
 	return &orderedStrictConsumer{
 		baseConsumer: &baseConsumer{
@@ -108,7 +108,7 @@ func (c *basicConsumer) Read(ctx context.Context, count int, blockDuration time.
 	if c.readPending {
 		messages, cursor, err := c.bus.ReadPending(ctx, c.group, c.consumer, count, c.readPendingCursor)
 		if err != nil {
-			return nil, err
+			return nil, &ConsumerError{Op: "read", Group: c.group, Consumer: c.consumer, Err: err}
 		}
 		if len(messages) > 0 {
 			c.readPendingCursor = cursor
@@ -122,28 +122,40 @@ func (c *basicConsumer) Read(ctx context.Context, count int, blockDuration time.
 	// Try to read expired messages
 	expired, err := c.bus.ReadExpired(ctx, c.group, c.consumer, count)
 	if err != nil {
-		return nil, err
+		return nil, &ConsumerError{Op: "read", Group: c.group, Consumer: c.consumer, Err: err}
 	}
 	if len(expired) > 0 {
 		return expired, nil
 	}
 
 	// Finally, read new messages
-	return c.bus.ReadNew(ctx, c.group, c.consumer, count, blockDuration)
+	messages, err := c.bus.ReadNew(ctx, c.group, c.consumer, count, blockDuration)
+	if err != nil {
+		return nil, &ConsumerError{Op: "read", Group: c.group, Consumer: c.consumer, Err: err}
+	}
+	return messages, nil
 }
 
-func (c *basicConsumer) Ack(ctx context.Context, subject string, ids ...string) (int64, error) {
+func (c *basicConsumer) Ack(ctx context.Context, subject string, ids ...string) (int, error) {
 	if err := c.init(ctx); err != nil {
 		return 0, err
 	}
-	return c.bus.Ack(ctx, c.group, subject, ids...)
+	n, err := c.bus.Ack(ctx, c.group, subject, ids...)
+	if err != nil {
+		return 0, &ConsumerError{Op: "ack", Group: c.group, Consumer: c.consumer, Err: err}
+	}
+	return n, nil
 }
 
 func (c *basicConsumer) Nack(ctx context.Context, subject, id string, nackDelay *time.Duration) (int, error) {
 	if err := c.init(ctx); err != nil {
 		return 0, err
 	}
-	return c.bus.Nack(ctx, c.group, c.consumer, subject, id, nackDelay)
+	n, err := c.bus.Nack(ctx, c.group, c.consumer, subject, id, nackDelay)
+	if err != nil {
+		return 0, &ConsumerError{Op: "nack", Group: c.group, Consumer: c.consumer, Err: err}
+	}
+	return n, nil
 }
 
 // orderedConsumer - ordered delivery, NACK not allowed.
@@ -161,7 +173,7 @@ func (c *orderedConsumer) Read(ctx context.Context, count int, blockDuration tim
 	if c.readPending {
 		messages, cursor, err := c.bus.ReadPending(ctx, c.group, c.consumer, count, c.readPendingCursor)
 		if err != nil {
-			return nil, err
+			return nil, &ConsumerError{Op: "read", Group: c.group, Consumer: c.consumer, Err: err}
 		}
 		if len(messages) > 0 {
 			c.readPendingCursor = cursor
@@ -173,17 +185,25 @@ func (c *orderedConsumer) Read(ctx context.Context, count int, blockDuration tim
 	}
 
 	// Read new messages only (no expired to maintain order)
-	return c.bus.ReadNew(ctx, c.group, c.consumer, count, blockDuration)
+	messages, err := c.bus.ReadNew(ctx, c.group, c.consumer, count, blockDuration)
+	if err != nil {
+		return nil, &ConsumerError{Op: "read", Group: c.group, Consumer: c.consumer, Err: err}
+	}
+	return messages, nil
 }
 
-func (c *orderedConsumer) Ack(ctx context.Context, subject string, ids ...string) (int64, error) {
+func (c *orderedConsumer) Ack(ctx context.Context, subject string, ids ...string) (int, error) {
 	if err := c.init(ctx); err != nil {
 		return 0, err
 	}
-	return c.bus.Ack(ctx, c.group, subject, ids...)
+	n, err := c.bus.Ack(ctx, c.group, subject, ids...)
+	if err != nil {
+		return 0, &ConsumerError{Op: "ack", Group: c.group, Consumer: c.consumer, Err: err}
+	}
+	return n, nil
 }
 
-func (c *orderedConsumer) Nack(ctx context.Context, subject, id string, nackDelay *time.Duration) (int, error) {
+func (c *orderedConsumer) Nack(_ context.Context, _, _ string, _ *time.Duration) (int, error) {
 	return 0, &ConsumerError{
 		Op:       "nack",
 		Group:    c.group,
@@ -209,7 +229,7 @@ func (c *orderedStrictConsumer) Read(ctx context.Context, count int, blockDurati
 	if c.readPending {
 		messages, cursor, err := c.bus.ReadPending(ctx, c.group, c.consumer, count, c.readPendingCursor)
 		if err != nil {
-			return nil, err
+			return nil, &ConsumerError{Op: "read", Group: c.group, Consumer: c.consumer, Err: err}
 		}
 		if len(messages) > 0 {
 			c.readPendingCursor = cursor
@@ -223,7 +243,7 @@ func (c *orderedStrictConsumer) Read(ctx context.Context, count int, blockDurati
 	// Read new messages
 	items, err := c.bus.ReadNew(ctx, c.group, c.consumer, count, blockDuration)
 	if err != nil {
-		return nil, err
+		return nil, &ConsumerError{Op: "read", Group: c.group, Consumer: c.consumer, Err: err}
 	}
 
 	// Track pending count
@@ -234,17 +254,17 @@ func (c *orderedStrictConsumer) Read(ctx context.Context, count int, blockDurati
 	return items, nil
 }
 
-func (c *orderedStrictConsumer) Ack(ctx context.Context, subject string, ids ...string) (int64, error) {
+func (c *orderedStrictConsumer) Ack(ctx context.Context, subject string, ids ...string) (int, error) {
 	if err := c.initStrict(ctx); err != nil {
 		return 0, err
 	}
 
 	acked, err := c.bus.Ack(ctx, c.group, subject, ids...)
 	if err != nil {
-		return 0, err
+		return 0, &ConsumerError{Op: "ack", Group: c.group, Consumer: c.consumer, Err: err}
 	}
 
-	if acked != int64(len(ids)) {
+	if acked != len(ids) {
 		return 0, &ConsumerError{
 			Op:       "ack",
 			Group:    c.group,
@@ -263,7 +283,7 @@ func (c *orderedStrictConsumer) Ack(ctx context.Context, subject string, ids ...
 	return acked, nil
 }
 
-func (c *orderedStrictConsumer) Nack(ctx context.Context, subject, id string, nackDelay *time.Duration) (int, error) {
+func (c *orderedStrictConsumer) Nack(_ context.Context, _, _ string, _ *time.Duration) (int, error) {
 	return 0, &ConsumerError{
 		Op:       "nack",
 		Group:    c.group,

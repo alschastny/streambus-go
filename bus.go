@@ -30,7 +30,7 @@ type Bus interface {
 	AddMany(ctx context.Context, subject string, items []any, producerID string) ([]string, error)
 
 	// Ack acknowledges messages
-	Ack(ctx context.Context, group, subject string, ids ...string) (int64, error)
+	Ack(ctx context.Context, group, subject string, ids ...string) (int, error)
 
 	// Nack negatively acknowledges a message
 	Nack(ctx context.Context, group, consumer, subject, id string, nackDelay *time.Duration) (int, error)
@@ -78,7 +78,7 @@ func NewStreamBus(
 	serializers map[string]Serializer,
 ) (*StreamBus, error) {
 	if err := settings.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid settings: %w", err)
+		return nil, &BusError{Op: "new", Err: fmt.Errorf("invalid settings: %w", err)}
 	}
 
 	bus := &StreamBus{
@@ -103,7 +103,7 @@ func NewStreamBus(
 // configureSerializers validates and stores serializers.
 func (b *StreamBus) configureSerializers(serializers map[string]Serializer) error {
 	if len(serializers) == 0 {
-		return ErrNoSerializers
+		return &BusError{Op: "configure", Err: ErrNoSerializers}
 	}
 
 	for subject, serializer := range serializers {
@@ -439,7 +439,7 @@ func (b *StreamBus) addWithTact(ctx context.Context, subject string, item any, p
 }
 
 // Ack acknowledges messages.
-func (b *StreamBus) Ack(ctx context.Context, group, subject string, ids ...string) (int64, error) {
+func (b *StreamBus) Ack(ctx context.Context, group, subject string, ids ...string) (int, error) {
 	if !b.settings.AckExplicit {
 		return 0, &BusError{Op: "ack", Subject: subject, Err: fmt.Errorf("ack mode not enabled")}
 	}
@@ -456,7 +456,7 @@ func (b *StreamBus) Ack(ctx context.Context, group, subject string, ids ...strin
 		if err != nil {
 			return 0, &BusError{Op: "ack", Subject: subject, Err: err}
 		}
-		var count int64
+		var count int
 		for _, v := range res {
 			if n, ok := v.(int64); ok && n > 0 {
 				count++
@@ -475,7 +475,7 @@ func (b *StreamBus) Ack(ctx context.Context, group, subject string, ids ...strin
 		b.client.XDel(ctx, key, ids...)
 	}
 
-	return result, nil
+	return int(result), nil
 }
 
 // checkDeleteModesSupport checks if Redis supports KEEPREF | DELREF | ACKED (version >= 8.2).
