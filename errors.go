@@ -14,6 +14,12 @@ var (
 
 	// ErrNackNotAllowed is returned when NACK is called on a consumer that doesn't support it.
 	ErrNackNotAllowed = fmt.Errorf("NACK not allowed for this consumer type")
+
+	// ErrStopProcessor is returned by a HandlerFunc to request a graceful processor shutdown.
+	ErrStopProcessor = fmt.Errorf("processor stop")
+
+	// ErrNoHandler is returned when a message arrives for a subject with no registered handler.
+	ErrNoHandler = fmt.Errorf("no handler registered")
 )
 
 // BusError represents an error that occurred during a bus operation.
@@ -62,5 +68,21 @@ func (e *ConsumerError) Error() string {
 }
 
 func (e *ConsumerError) Unwrap() error {
+	return e.Err
+}
+
+// ProcessorError represents an error that occurred during processor operations.
+type ProcessorError struct {
+	Op      string // operation that failed (e.g., "handle", "ack", "nack")
+	Subject string // subject being processed
+	ID      string // message ID if applicable
+	Err     error  // underlying error
+}
+
+func (e *ProcessorError) Error() string {
+	return fmt.Sprintf("streambus: processor %s %s/%s: %v", e.Op, e.Subject, e.ID, e.Err)
+}
+
+func (e *ProcessorError) Unwrap() error {
 	return e.Err
 }

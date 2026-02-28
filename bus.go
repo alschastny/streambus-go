@@ -2,6 +2,7 @@ package streambus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"regexp"
@@ -351,6 +352,8 @@ func (b *StreamBus) buildXAddArgs(ctx context.Context, stream string, data map[s
 			}
 			args.ProducerID = producerID
 			args.IdempotentID = idmpId
+		default:
+			return nil, fmt.Errorf("unknown IdmpMode: %d", b.settings.IdmpMode)
 		}
 	}
 
@@ -567,13 +570,12 @@ func (b *StreamBus) Nack(ctx context.Context, group, consumer, subject, id strin
 
 		// Send to DLQ
 		if b.deadLetterQueue != nil && messageData != nil {
-			b.deadLetterQueue.Add(ctx, subject, messageData, "")
+			_, _ = b.deadLetterQueue.Add(ctx, subject, messageData, "")
 		}
 
 		// Call processor
 		if b.maxAttemptsProcessor != nil {
-			b.maxAttemptsProcessor(id, messageData)
-			return 1, nil
+			return 1, b.maxAttemptsProcessor(id, messageData)
 		}
 
 		return 1, nil
@@ -628,7 +630,7 @@ func (b *StreamBus) ReadNew(ctx context.Context, group, consumer string, count i
 		NoAck:    noAck,
 	}).Result()
 
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return make(map[string][]Message), nil
 	}
 	if err != nil {
@@ -784,7 +786,7 @@ func (b *StreamBus) ReadPending(ctx context.Context, group, consumer string, cou
 		NoAck:    noAck,
 	}).Result()
 
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return make(map[string][]Message), cursor, nil
 	}
 	if err != nil {
