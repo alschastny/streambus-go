@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -59,7 +60,7 @@ type StreamBus struct {
 	streamKeys           []string
 	maxSizeOperator      string
 	addMethod            addMethodFunc
-	tact                 bool
+	tact                 atomic.Uint32
 	deadLetterQueue      Bus
 	maxAttemptsProcessor func(string, any) error
 	cursor               string // XAUTOCLAIM cursor for ReadExpired randomness
@@ -239,8 +240,7 @@ func (b *StreamBus) AddMany(ctx context.Context, subject string, items []any, pr
 			if err != nil {
 				return nil, &BusError{Op: "addMany", Subject: subject, Err: err}
 			}
-			b.tact = !b.tact
-			if b.tact {
+			if b.tact.Add(1)%2 == 1 {
 				minID := serverTime.Add(-b.settings.MinTTL).UnixMilli()
 				lastTrimArgs = []any{"MINID", b.maxSizeOperator, strconv.FormatInt(minID, 10)}
 			} else {
@@ -434,8 +434,7 @@ func (b *StreamBus) addWithSize(ctx context.Context, subject string, item any, p
 
 // addWithTact alternates between TTL and size-based trimming.
 func (b *StreamBus) addWithTact(ctx context.Context, subject string, item any, producerID string) (string, error) {
-	b.tact = !b.tact
-	if b.tact {
+	if b.tact.Add(1)%2 == 1 {
 		return b.addWithTTL(ctx, subject, item, producerID)
 	}
 	return b.addWithSize(ctx, subject, item, producerID)

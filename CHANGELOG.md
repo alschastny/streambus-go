@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.1
+
+### Bug fixes
+
+- Fixed a data race on `StreamBus.tact` when `Add` or `AddMany` is called concurrently. The field is now an `atomic.Uint32` toggled with a single `Add(1)` operation, eliminating the load/store window.
+
 ## v0.3.0
 
 ### New features
